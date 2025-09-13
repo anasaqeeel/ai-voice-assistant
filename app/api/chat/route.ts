@@ -1,9 +1,9 @@
-import { type NextRequest, NextResponse } from "next/server"
-import OpenAI from "openai"
+import { type NextRequest, NextResponse } from "next/server";
+import OpenAI from "openai";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
-})
+});
 
 const personalities = {
   maya: {
@@ -81,40 +81,47 @@ Your communication style:
 You excel at: emotional support, wellness advice, stress management, mindfulness techniques, and helping people maintain work-life balance. You're ideal for anyone seeking emotional support and wellness guidance.`,
     voice: "shimmer",
   },
-}
+};
 
 export async function POST(request: NextRequest) {
   try {
-    const formData = await request.formData()
-    const audioFile = formData.get("audio") as File
-    const contactId = formData.get("contactId") as string
+    const formData = await request.formData();
+    const audioFile = formData.get("audio") as File;
+    const contactId = formData.get("contactId") as string;
 
     if (!audioFile || !contactId) {
-      return NextResponse.json({ error: "Missing audio file or contact ID" }, { status: 400 })
+      return NextResponse.json(
+        { error: "Missing audio file or contact ID" },
+        { status: 400 }
+      );
     }
 
-    const personality = personalities[contactId as keyof typeof personalities]
+    const personality = personalities[contactId as keyof typeof personalities];
     if (!personality) {
-      return NextResponse.json({ error: "Invalid contact ID" }, { status: 400 })
+      return NextResponse.json(
+        { error: "Invalid contact ID" },
+        { status: 400 }
+      );
     }
 
-    // Step 1: Convert speech to text using Whisper
-    console.log(`Converting speech to text for ${personality.name}...`)
+    console.log(`Converting speech to text for ${personality.name}...`);
     const transcription = await openai.audio.transcriptions.create({
       file: audioFile,
       model: "whisper-1",
       language: "en",
-    })
+    });
 
-    const userText = transcription.text
-    console.log("User said:", userText)
+    const userText = transcription.text;
+    console.log("User said:", userText);
 
     if (!userText.trim()) {
-      return NextResponse.json({ error: "No speech detected" }, { status: 400 })
+      return NextResponse.json(
+        { error: "No speech detected" },
+        { status: 400 }
+      );
     }
 
-    // Step 2: Generate AI response using GPT with personality
-    console.log(`Generating ${personality.name}'s response...`)
+    console.log(`Generating ${personality.name}'s response...`);
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
@@ -128,31 +135,28 @@ export async function POST(request: NextRequest) {
         },
       ],
       max_tokens: 150,
-      temperature: 0.8, // Slightly higher for more personality
+      temperature: 0.7, // Slightly reduced for faster response
       presence_penalty: 0.1,
       frequency_penalty: 0.1,
-    })
+    });
 
-    const aiResponse = completion.choices[0]?.message?.content
+    const aiResponse = completion.choices[0]?.message?.content;
     if (!aiResponse) {
-      throw new Error("No AI response generated")
+      throw new Error("No AI response generated");
     }
 
-    console.log(`${personality.name} response:`, aiResponse)
+    console.log(`${personality.name} response:`, aiResponse);
 
-    // Step 3: Convert AI response to speech using OpenAI TTS
-    console.log(`Converting ${personality.name}'s text to speech...`)
+    console.log(`Converting ${personality.name}'s text to speech...`);
     const speechResponse = await openai.audio.speech.create({
-      model: "tts-1-hd", // Higher quality model
+      model: "tts-1-hd",
       voice: personality.voice as any,
       input: aiResponse,
-      speed: 1.0,
-    })
+      speed: 1.1, // Slightly increased speed to reduce delay
+    });
 
-    // Convert the response to a buffer
-    const audioBuffer = Buffer.from(await speechResponse.arrayBuffer())
+    const audioBuffer = Buffer.from(await speechResponse.arrayBuffer());
 
-    // Return the audio file with enhanced headers
     return new NextResponse(audioBuffer, {
       headers: {
         "Content-Type": "audio/mpeg",
@@ -162,9 +166,12 @@ export async function POST(request: NextRequest) {
         "X-Personality": personality.name,
         "X-Voice-Provider": "openai",
       },
-    })
+    });
   } catch (error) {
-    console.error("Error in chat API:", error)
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 })
+    console.error("Error in chat API:", error);
+    return NextResponse.json(
+      { error: "Internal server error" },
+      { status: 500 }
+    );
   }
 }

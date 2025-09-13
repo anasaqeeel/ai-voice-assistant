@@ -40,7 +40,7 @@ export function useAIConversation(contactId: string) {
         await audioManager.resumeAudioContext();
 
         const formData = new FormData();
-        formData.append("audio", audioBlob, "recording.mp3"); // Updated to MP3
+        formData.append("audio", audioBlob, "recording.mp3");
         formData.append("contactId", contactId);
 
         const endpoint = useElevenLabs ? "/api/chat/elevenlabs" : "/api/chat";
@@ -96,7 +96,7 @@ export function useAIConversation(contactId: string) {
         setIsAISpeaking(false);
         setTimeout(() => {
           sendIdleResponse("Um, I missed that. Please try again?");
-        }, 1000);
+        }, 500); // Reduced delay to 500ms
       } finally {
         setIsConnecting(false);
       }

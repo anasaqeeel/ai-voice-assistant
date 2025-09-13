@@ -31,8 +31,7 @@ export default function VoiceChat({ contact, onBack }: VoiceChatProps) {
   const {
     isRecording,
     isProcessing,
-    handleMouseDown,
-    handleMouseUp,
+    handleMouseDown: handleMicToggle,
     audioLevel,
     recordingDuration,
     setIsProcessing,
@@ -74,29 +73,18 @@ export default function VoiceChat({ contact, onBack }: VoiceChatProps) {
       e.preventDefault();
       if (!isMuted && isCallActive) {
         resetActivityTimer();
-        handleMouseDown();
+        handleMicToggle().then((blob) => {
+          if (blob && blob.size > 0) {
+            console.log(`Sending audio blob of size ${blob.size} bytes to AI...`);
+            sendMessage(blob);
+          }
+        });
       }
     },
-    [isMuted, isCallActive, handleMouseDown, resetActivityTimer]
+    [isMuted, isCallActive, handleMicToggle, resetActivityTimer, sendMessage]
   );
 
-  const handleMicRelease = useCallback(
-    async (e: React.MouseEvent | React.TouchEvent) => {
-      e.preventDefault();
-      if (isRecording && isCallActive) {
-        setIsProcessing(true);
-        const blob = await stopRecording();
-        if (blob && blob.size > 0) {
-          console.log(`Sending audio blob of size ${blob.size} bytes to AI...`);
-          await sendMessage(blob);
-        } else {
-          console.warn("No audio captured—try speaking louder or hold longer.");
-        }
-        setIsProcessing(false);
-      }
-    },
-    [isRecording, isCallActive, stopRecording, sendMessage]
-  );
+  const handleMicRelease = useCallback(() => {}, []); // No longer needed with toggle
 
   const formatDuration = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -115,12 +103,13 @@ export default function VoiceChat({ contact, onBack }: VoiceChatProps) {
     setCallDuration(0);
     clearConversation();
     onBack();
+    stopRecording(); // Ensure recording stops
   };
 
   const handleMuteToggle = () => {
     setIsMuted(!isMuted);
     if (isRecording) {
-      handleMouseUp();
+      stopRecording();
     }
     if (!isMuted) {
       resetActivityTimer();
@@ -133,7 +122,7 @@ export default function VoiceChat({ contact, onBack }: VoiceChatProps) {
     if (isAISpeaking) return `${contact.name} is speaking...`;
     if (isRecording) return `Recording... ${formatDuration(recordingDuration)}`;
     if (isProcessing) return "Processing your message...";
-    return "Tap and hold to speak";
+    return "Tap to speak";
   };
 
   return (
@@ -367,9 +356,7 @@ export default function VoiceChat({ contact, onBack }: VoiceChatProps) {
 
                 <motion.button
                   onMouseDown={handleMicPress}
-                  onMouseUp={handleMicRelease}
                   onTouchStart={handleMicPress}
-                  onTouchEnd={handleMicRelease}
                   disabled={isMuted || isAISpeaking}
                   className={`w-24 h-24 rounded-full flex items-center justify-center transition-all duration-300 shadow-xl ${
                     isRecording

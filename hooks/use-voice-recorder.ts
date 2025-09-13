@@ -59,7 +59,6 @@ export function useVoiceRecorder() {
   const startRecording = useCallback(async () => {
     try {
       console.log("Requesting mic access...");
-      // Check if secure context is available
       if (!("mediaDevices" in navigator) || !window.isSecureContext) {
         console.error(
           "Microphone access requires a secure context (HTTPS). Use --https or ngrok."
@@ -70,7 +69,6 @@ export function useVoiceRecorder() {
         return;
       }
 
-      // Explicit permission request
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
@@ -145,25 +143,25 @@ export function useVoiceRecorder() {
     };
   }, []);
 
-  const handleMouseDown = useCallback(() => {
-    startRecording();
-  }, [startRecording]);
-
-  const handleMouseUp = useCallback(async () => {
-    const blob = await stopRecording();
-    if (blob && blob.size > 0) {
-      console.log("Blob ready for send:", blob.size);
+  const handleMicToggle = useCallback(async () => {
+    if (isRecording) {
+      const blob = await stopRecording();
+      return blob;
+    } else {
+      startRecording();
+      return null;
     }
-  }, [stopRecording]);
+  }, [isRecording, startRecording, stopRecording]);
 
   return {
     isRecording,
     isProcessing,
     audioLevel,
     recordingDuration,
-    handleMouseDown,
-    handleMouseUp,
+    handleMouseDown: handleMicToggle, // Replaced with toggle logic
+    handleMouseUp: () => {}, // No longer needed with toggle
     setIsProcessing,
     stopRecording,
+    handleMicToggle, // Added for explicit toggle control
   };
 }

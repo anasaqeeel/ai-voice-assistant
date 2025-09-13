@@ -130,7 +130,7 @@ export async function POST(request: NextRequest) {
         { role: "user", content: userText },
       ],
       max_tokens: 150,
-      temperature: 0.8,
+      temperature: 0.7, // Reduced for faster response
       presence_penalty: 0.1,
       frequency_penalty: 0.1,
     });
@@ -161,6 +161,7 @@ export async function POST(request: NextRequest) {
             similarity_boost: 0.85,
             style: 0.3,
             use_speaker_boost: true,
+            speed: 1.1, // Increased speed to reduce delay
           },
         }),
       }
