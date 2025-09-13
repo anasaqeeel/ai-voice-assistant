@@ -128,8 +128,18 @@ export function useAIConversation(contactId: string) {
         setIsAISpeaking(true);
         try {
           await audioManager.playAudioBlob(responseAudio);
-        } catch (audioError) {
-          console.error("Audio playback failed:", audioError);
+        } catch (audioError: any) {
+          // Quiet expected/benign cases: autoplay block, interrupted, aborts
+          const name = audioError?.name || "";
+          const msg = (audioError?.message || "").toLowerCase();
+          const expected =
+            name === "AbortError" ||
+            name === "NotAllowedError" ||
+            msg.includes("interrupted") ||
+            msg.includes("abort");
+          if (!expected) {
+            console.error("Audio playback failed:", audioError);
+          }
         } finally {
           setIsPlaying(false);
           setIsAISpeaking(false);
@@ -198,8 +208,17 @@ export function useAIConversation(contactId: string) {
         setIsAISpeaking(true);
         try {
           await audioManager.playAudioBlob(responseAudio);
-        } catch (audioError) {
-          console.error("Idle audio playback failed:", audioError);
+        } catch (audioError: any) {
+          const name = audioError?.name || "";
+          const msg = (audioError?.message || "").toLowerCase();
+          const expected =
+            name === "AbortError" ||
+            name === "NotAllowedError" ||
+            msg.includes("interrupted") ||
+            msg.includes("abort");
+          if (!expected) {
+            console.error("Idle audio playback failed:", audioError);
+          }
         } finally {
           setIsPlaying(false);
           setIsAISpeaking(false);

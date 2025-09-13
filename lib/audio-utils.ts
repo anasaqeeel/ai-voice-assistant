@@ -43,35 +43,61 @@ export class AudioManager {
           this.currentUrl = null;
         };
 
-        audio.onended = () => {
-          // Only cleanup if this play is still current
-          if (localToken === this.playToken) cleanup();
-          resolve();
-        };
-
-        audio.onerror = (err) => {
-          if (localToken === this.playToken) cleanup();
-          reject(err);
-        };
-
-        audio.oncanplaythrough = () => {
-          // If we were stopped before playback, don't start
+        const done = (ok = true, err?: unknown) => {
           if (localToken !== this.playToken) {
+            // already invalidated
             cleanup();
-            resolve();
+            ok ? resolve() : reject(err);
             return;
           }
-          audio.play().catch((err) => {
-            // If stopped between canplay and play, treat as resolved
-            if (localToken !== this.playToken) {
-              cleanup();
-              resolve();
+          cleanup();
+          ok ? resolve() : reject(err);
+        };
+
+        const attemptPlay = async (retry = false) => {
+          if (localToken !== this.playToken) return done(true);
+          try {
+            // If AudioContext got suspended mid-flight, resume once
+            if (this.audioContext && this.audioContext.state === "suspended") {
+              try {
+                await this.audioContext.resume();
+              } catch {}
+            }
+            await audio.play();
+            // success: let onended resolve
+          } catch (err: any) {
+            // If we were stopped while play() was pending, resolve silently
+            if (localToken !== this.playToken) return done(true);
+
+            // Autoplay or transient "play() was interrupted" → retry once after a tick
+            const name = err?.name || "";
+            const msg = (err?.message || "").toLowerCase();
+            const isAutoplay = name === "NotAllowedError";
+            const isInterrupted =
+              msg.includes("interrupted") || msg.includes("abort");
+
+            if (!retry && (isAutoplay || isInterrupted)) {
+              // small delay before retry helps Safari/Android
+              setTimeout(() => attemptPlay(true), 50);
               return;
             }
-            cleanup();
-            reject(err);
-          });
+
+            // Unrecoverable: fail this play but clean up
+            done(false, err ?? new Error("Audio play failed"));
+          }
         };
+
+        const onReady = () => {
+          // start ASAP (reduces perceived delay)
+          attemptPlay(false);
+        };
+
+        // Whichever fires first will start playback
+        audio.oncanplay = onReady;
+        audio.onloadeddata = onReady;
+
+        audio.onended = () => done(true);
+        audio.onerror = (err) => done(false, err);
       } catch (error) {
         reject(error);
       }
@@ -86,7 +112,6 @@ export class AudioManager {
       try {
         this.currentAudio.pause();
         this.currentAudio.currentTime = 0;
-        // Clearing the source prevents some browsers from resuming it later
         this.currentAudio.src = "";
       } catch {}
     }
@@ -106,7 +131,6 @@ export class AudioManager {
   }
 
   async convertAudioFormat(blob: Blob, _targetType: string): Promise<Blob> {
-    // placeholder for real conversion if you add it later
     return blob;
   }
 
@@ -128,5 +152,4 @@ export class AudioManager {
   }
 }
 
-// Singleton instance
 export const audioManager = new AudioManager();
