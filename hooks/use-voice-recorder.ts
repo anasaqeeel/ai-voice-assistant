@@ -12,7 +12,7 @@ import MicRecorder from "mic-recorder-to-mp3";
 
 const recorder = new MicRecorder({
   bitRate: 128,
-  sampleRate: 16000, // Matches Whisper preference
+  sampleRate: 16000,
 });
 
 export function useVoiceRecorder() {
@@ -59,7 +59,26 @@ export function useVoiceRecorder() {
   const startRecording = useCallback(async () => {
     try {
       console.log("Requesting mic access...");
-      await navigator.mediaDevices.getUserMedia({ audio: true });
+      // Check if secure context is available
+      if (!("mediaDevices" in navigator) || !window.isSecureContext) {
+        console.error(
+          "Microphone access requires a secure context (HTTPS). Use --https or ngrok."
+        );
+        alert(
+          "Microphone access requires HTTPS. Start with 'npm run dev -- --https' or use ngrok."
+        );
+        return;
+      }
+
+      // Explicit permission request
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          sampleRate: 16000,
+        },
+      });
       const audioContext = new AudioContext({ sampleRate: 16000 });
       const analyser = audioContext.createAnalyser();
       analyser.fftSize = 512;
@@ -73,7 +92,21 @@ export function useVoiceRecorder() {
       updateAudioLevel();
     } catch (error) {
       console.error("Error starting recording:", error);
-      alert("Microphone access denied. Please allow and retry.");
+      if (
+        error instanceof Error &&
+        (error.name === "NotAllowedError" ||
+          error.name === "PermissionDeniedError")
+      ) {
+        alert(
+          "Microphone permission denied. Check OS settings or browser permissions."
+        );
+      } else if (error instanceof Error && error.name === "NotFoundError") {
+        alert("No microphone detected. Connect a microphone and retry.");
+      } else {
+        alert(
+          "Failed to access microphone. Please try again or contact support."
+        );
+      }
     }
   }, [updateAudioLevel]);
 
