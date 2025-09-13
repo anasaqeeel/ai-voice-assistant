@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ArrowLeft, Mic, MicOff, Phone, PhoneOff, Volume2, Clock } from "lucide-react";
 import VoiceIndicator from "./voice-indicator";
@@ -59,7 +59,6 @@ export default function VoiceChat({ contact, onBack }: VoiceChatProps) {
     sendIdleResponse,
   );
 
-  // Call timer with dependency array to prevent infinite loop
   useEffect(() => {
     let timer: NodeJS.Timeout;
     if (isCallActive) {
@@ -68,7 +67,7 @@ export default function VoiceChat({ contact, onBack }: VoiceChatProps) {
       }, 1000);
     }
     return () => clearInterval(timer);
-  }, [isCallActive]); // Dependency on isCallActive only
+  }, [isCallActive]);
 
   const handleMicPress = useCallback(
     (e: React.MouseEvent | React.TouchEvent) => {
@@ -114,21 +113,14 @@ export default function VoiceChat({ contact, onBack }: VoiceChatProps) {
   const handleEndCall = () => {
     setIsCallActive(false);
     setCallDuration(0);
-    clearConversation(); // Clear conversation state
-    // Stop any ongoing audio contexts and streams
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((track) => track.stop());
-    }
-    if (audioContextRef.current) {
-      audioContextRef.current.close();
-    }
-    onBack(); // Navigate back after cleanup
+    clearConversation();
+    onBack();
   };
 
   const handleMuteToggle = () => {
     setIsMuted(!isMuted);
     if (isRecording) {
-      handleMouseUp(); // Stop on mute
+      handleMouseUp();
     }
     if (!isMuted) {
       resetActivityTimer();
@@ -143,10 +135,6 @@ export default function VoiceChat({ contact, onBack }: VoiceChatProps) {
     if (isProcessing) return "Processing your message...";
     return "Tap and hold to speak";
   };
-
-  // Expose refs for cleanup (temporary until hook handles this)
-  const streamRef = useRef<MediaStream | null>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-muted/20 to-background relative overflow-hidden">
@@ -289,7 +277,7 @@ export default function VoiceChat({ contact, onBack }: VoiceChatProps) {
 
               <motion.button
                 onClick={handleStartCall}
-                className="w-20 h-20 bg-gradient-to-r from-primary to-accent hover:from-primary/90 hover:to-accent/90 rounded-full flex items-center justify-center transition-all duration-300 shadow-xl"
+                className="w-24 h-24 bg-gradient-to-r from-primary to-accent hover:from-primary/90 hover:to-accent/90 rounded-full flex items-center justify-center transition-all duration-300 shadow-xl"
                 whileHover={{ scale: 1.1 }}
                 whileTap={{ scale: 0.95 }}
                 animate={{
@@ -301,7 +289,7 @@ export default function VoiceChat({ contact, onBack }: VoiceChatProps) {
                 }}
                 transition={{ duration: 2, repeat: Number.POSITIVE_INFINITY }}
               >
-                <Phone className="w-8 h-8 text-white" />
+                <Phone className="w-10 h-10 text-white" />
               </motion.button>
             </motion.div>
           ) : (

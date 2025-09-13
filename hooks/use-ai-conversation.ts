@@ -17,7 +17,7 @@ export function useAIConversation(contactId: string) {
   const [isConnecting, setIsConnecting] = useState(false);
   const [useElevenLabs, setUseElevenLabs] = useState(true);
   const [prevContactId, setPrevContactId] = useState(contactId);
-  const [isPlaying, setIsPlaying] = useState(false); // Prevent concurrent playback
+  const [isPlaying, setIsPlaying] = useState(false);
 
   useEffect(() => {
     if (prevContactId !== contactId) {
@@ -34,13 +34,13 @@ export function useAIConversation(contactId: string) {
 
   const sendMessage = useCallback(
     async (audioBlob: Blob) => {
-      if (isPlaying) return; // Prevent overlap
+      if (isPlaying) return;
       try {
         setIsConnecting(true);
         await audioManager.resumeAudioContext();
 
         const formData = new FormData();
-        formData.append("audio", audioBlob, "recording.webm");
+        formData.append("audio", audioBlob, "recording.mp3"); // Updated to MP3
         formData.append("contactId", contactId);
 
         const endpoint = useElevenLabs ? "/api/chat/elevenlabs" : "/api/chat";

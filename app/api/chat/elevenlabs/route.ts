@@ -10,7 +10,7 @@ const elevenLabsVoices = {
   maya: {
     voiceId: "21m00Tcm4TlvDq8ikWAM",
     name: "Maya",
-    systemPrompt: `You are Maya, a highly professional and empathetic AI assistant specializing in business strategy and productivity...`,
+    systemPrompt: `You are Maya, a highly professional and empathetic AI assistant...`,
   },
   miles: {
     voiceId: "pNInz6obpgDQGcFmaJgB",
@@ -52,7 +52,7 @@ export async function POST(request: NextRequest) {
     );
 
     if (audioFile.size < 1000) {
-      console.log("Audio file too small, skipping transcription");
+      console.log("Audio too small");
       return NextResponse.json(
         { error: "Audio too short. Record for at least 1 second." },
         { status: 400 }
