@@ -1,6 +1,13 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect } from "react";
+import {
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+  Dispatch,
+  SetStateAction,
+} from "react";
 
 export function useVoiceRecorder() {
   const [isRecording, setIsRecording] = useState(false);
@@ -13,23 +20,21 @@ export function useVoiceRecorder() {
   const analyserRef = useRef<AnalyserNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const animationFrameRef = useRef<number | undefined>(undefined);
-  const audioChunksRef = useRef<Blob[]>([]);
+  const audioChunksRef = useRef<BlobPart[]>([]);
   const recordingTimerRef = useRef<NodeJS.Timeout | undefined>(undefined);
+  const onRecordingCompleteRef = useRef<(blob: Blob) => void>(() => {});
 
   const updateAudioLevel = useCallback(() => {
     if (analyserRef.current && isRecording) {
       const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
       analyserRef.current.getByteFrequencyData(dataArray);
 
-      // Calculate RMS (Root Mean Square) for better audio level representation
       const rms = Math.sqrt(
         dataArray.reduce((sum, value) => sum + value * value, 0) /
           dataArray.length
       );
-
-      // Normalize and smooth the audio level
       const normalizedLevel = Math.min(rms / 128, 1);
-      setAudioLevel((prev) => prev * 0.7 + normalizedLevel * 0.3); // Smooth transition
+      setAudioLevel((prev) => prev * 0.7 + normalizedLevel * 0.3);
 
       animationFrameRef.current = requestAnimationFrame(updateAudioLevel);
     }
@@ -37,9 +42,11 @@ export function useVoiceRecorder() {
 
   useEffect(() => {
     if (isRecording) {
+      console.log("Recording started");
       recordingTimerRef.current = setInterval(() => {
         setRecordingDuration((prev) => prev + 1);
       }, 1000);
+      updateAudioLevel();
     } else {
       if (recordingTimerRef.current) {
         clearInterval(recordingTimerRef.current);
@@ -52,77 +59,54 @@ export function useVoiceRecorder() {
         clearInterval(recordingTimerRef.current);
       }
     };
-  }, [isRecording]);
+  }, [isRecording, updateAudioLevel]);
 
-  const startRecording = useCallback(async () => {
-    try {
-      // Request high-quality audio with noise suppression
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          sampleRate: 44100,
-          channelCount: 1,
-        },
-      });
+  const startRecording = useCallback(
+    async (onComplete?: (blob: Blob) => void) => {
+      try {
+        console.log("Requesting mic access...");
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+            sampleRate: 16000, // Lowered for better Whisper compatibility
+            channelCount: 1,
+          },
+        });
 
-      streamRef.current = stream;
-      audioChunksRef.current = [];
+        streamRef.current = stream;
+        audioChunksRef.current = [];
 
-      // Set up audio analysis for visual feedback
-      const audioContext = new AudioContext();
-      const analyser = audioContext.createAnalyser();
-      const source = audioContext.createMediaStreamSource(stream);
+        const audioContext = new AudioContext({ sampleRate: 16000 });
+        const analyser = audioContext.createAnalyser();
+        const source = audioContext.createMediaStreamSource(stream);
+        analyser.fftSize = 512;
+        analyser.smoothingTimeConstant = 0.8;
+        source.connect(analyser);
 
-      // Configure analyser for better frequency analysis
-      analyser.fftSize = 512;
-      analyser.smoothingTimeConstant = 0.8;
-      source.connect(analyser);
+        audioContextRef.current = audioContext;
+        analyserRef.current = analyser;
 
-      audioContextRef.current = audioContext;
-      analyserRef.current = analyser;
+        const mediaRecorder = new MediaRecorder(stream, {
+          mimeType: MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+            ? "audio/webm;codecs=opus"
+            : "audio/webm",
+        });
 
-      // Set up MediaRecorder with optimal settings
-      const mediaRecorder = new MediaRecorder(stream, {
-        mimeType: MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-          ? "audio/webm;codecs=opus"
-          : "audio/webm",
-      });
+        mediaRecorder.ondataavailable = (event) => {
+          if (event.data.size > 0) {
+            console.log(`Chunk received: ${event.data.size} bytes`);
+            audioChunksRef.current.push(event.data);
+          }
+        };
 
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
-        }
-      };
-
-      mediaRecorder.onstop = () => {
-        // Cleanup will be handled in stopRecording
-      };
-
-      mediaRecorderRef.current = mediaRecorder;
-      mediaRecorder.start(100); // Collect data every 100ms for smoother processing
-      setIsRecording(true);
-      setRecordingDuration(0);
-      updateAudioLevel();
-    } catch (error) {
-      console.error("Error starting recording:", error);
-      // Handle permission denied or other errors gracefully
-      alert(
-        "Microphone access is required for voice chat. Please allow microphone permissions and try again."
-      );
-    }
-  }, [updateAudioLevel]);
-
-  const stopRecording = useCallback((): Promise<Blob | null> => {
-    return new Promise((resolve) => {
-      if (mediaRecorderRef.current && isRecording) {
-        mediaRecorderRef.current.onstop = () => {
+        mediaRecorder.onstop = () => {
           const audioBlob = new Blob(audioChunksRef.current, {
             type: "audio/webm",
           });
+          console.log(`Recording stopped. Blob size: ${audioBlob.size} bytes`);
 
-          // Cleanup
           if (streamRef.current) {
             streamRef.current.getTracks().forEach((track) => track.stop());
           }
@@ -137,9 +121,34 @@ export function useVoiceRecorder() {
           setAudioLevel(0);
           setRecordingDuration(0);
 
-          resolve(audioBlob);
+          if (onComplete && audioBlob.size > 0) {
+            onComplete(audioBlob);
+          } else if (audioBlob.size === 0) {
+            console.warn("Empty blob—retry recording");
+          }
         };
 
+        mediaRecorderRef.current = mediaRecorder;
+        mediaRecorder.start(100); // 100ms timeslice
+        setIsRecording(true);
+        onRecordingCompleteRef.current = onComplete || (() => {});
+      } catch (error) {
+        console.error("Error starting recording:", error);
+        alert("Microphone access denied. Please allow and retry.");
+      }
+    },
+    []
+  );
+
+  const stopRecording = useCallback((): Promise<Blob | null> => {
+    return new Promise((resolve) => {
+      if (mediaRecorderRef.current && isRecording) {
+        mediaRecorderRef.current.onstop = () => {
+          const audioBlob = new Blob(audioChunksRef.current, {
+            type: "audio/webm",
+          });
+          resolve(audioBlob);
+        };
         mediaRecorderRef.current.stop();
       } else {
         resolve(null);
@@ -164,13 +173,27 @@ export function useVoiceRecorder() {
     };
   }, []);
 
+  const handleMouseDown = useCallback(() => {
+    startRecording((blob) => {
+      console.log("Hold released—processing blob");
+    });
+  }, [startRecording]);
+
+  const handleMouseUp = useCallback(async () => {
+    const blob = await stopRecording();
+    if (blob && blob.size > 0) {
+      console.log("Blob ready for send:", blob.size);
+    }
+  }, [stopRecording]);
+
   return {
     isRecording,
     isProcessing,
     audioLevel,
     recordingDuration,
-    startRecording,
-    stopRecording,
+    handleMouseDown,
+    handleMouseUp,
     setIsProcessing,
+    stopRecording,
   };
 }

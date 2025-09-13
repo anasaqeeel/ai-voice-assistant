@@ -1,35 +1,43 @@
-"use client"
+"use client";
 
-import { useState, useEffect } from "react"
-import { motion, AnimatePresence } from "framer-motion"
-import { ArrowLeft, Mic, MicOff, Phone, PhoneOff, Volume2, Clock } from "lucide-react"
-import VoiceIndicator from "./voice-indicator"
-import ConversationHistory from "./conversation-history"
-import { useVoiceRecorder } from "@/hooks/use-voice-recorder"
-import { useAIConversation } from "@/hooks/use-ai-conversation"
-import { useIdleResponses } from "@/hooks/use-idle-responses" // Import idle responses hook
+import { useState, useRef, useEffect, useCallback } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { ArrowLeft, Mic, MicOff, Phone, PhoneOff, Volume2, Clock } from "lucide-react";
+import VoiceIndicator from "./voice-indicator";
+import ConversationHistory from "./conversation-history";
+import { useVoiceRecorder } from "@/hooks/use-voice-recorder";
+import { useAIConversation } from "@/hooks/use-ai-conversation";
+import { useIdleResponses } from "@/hooks/use-idle-responses";
 
 interface Contact {
-  id: string
-  name: string
-  personality: string
-  avatar: string
-  description: string
+  id: string;
+  name: string;
+  personality: string;
+  avatar: string;
+  description: string;
 }
 
 interface VoiceChatProps {
-  contact: Contact
-  onBack: () => void
+  contact: Contact;
+  onBack: () => void;
 }
 
 export default function VoiceChat({ contact, onBack }: VoiceChatProps) {
-  const [isCallActive, setIsCallActive] = useState(false)
-  const [callDuration, setCallDuration] = useState(0)
-  const [isMuted, setIsMuted] = useState(false)
-  const [showHistory, setShowHistory] = useState(false)
+  const [isCallActive, setIsCallActive] = useState(false);
+  const [callDuration, setCallDuration] = useState(0);
+  const [isMuted, setIsMuted] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
 
-  const { isRecording, isProcessing, startRecording, stopRecording, audioLevel, recordingDuration, setIsProcessing } =
-    useVoiceRecorder()
+  const {
+    isRecording,
+    isProcessing,
+    handleMouseDown,
+    handleMouseUp,
+    audioLevel,
+    recordingDuration,
+    setIsProcessing,
+    stopRecording,
+  } = useVoiceRecorder();
 
   const {
     isAISpeaking,
@@ -40,7 +48,7 @@ export default function VoiceChat({ contact, onBack }: VoiceChatProps) {
     useElevenLabs,
     toggleTTSProvider,
     clearConversation,
-  } = useAIConversation(contact.id)
+  } = useAIConversation(contact.id);
 
   const { resetActivityTimer } = useIdleResponses(
     contact.id,
@@ -49,76 +57,96 @@ export default function VoiceChat({ contact, onBack }: VoiceChatProps) {
     isAISpeaking,
     isProcessing,
     sendIdleResponse,
-  )
+  );
 
-  // Call timer
+  // Call timer with dependency array to prevent infinite loop
   useEffect(() => {
-    let timer: NodeJS.Timeout
+    let timer: NodeJS.Timeout;
     if (isCallActive) {
       timer = setInterval(() => {
-        setCallDuration((prev) => prev + 1)
-      }, 1000)
+        setCallDuration((prev) => prev + 1);
+      }, 1000);
     }
-    return () => clearInterval(timer)
-  }, [isCallActive])
+    return () => clearInterval(timer);
+  }, [isCallActive]); // Dependency on isCallActive only
 
-  const handleMicToggle = async () => {
-    if (isRecording) {
-      try {
-        setIsProcessing(true)
-        const audioBlob = await stopRecording()
-        if (audioBlob && isCallActive) {
-          resetActivityTimer() // Reset idle timer when user speaks
-          await sendMessage(audioBlob)
-        }
-      } catch (error) {
-        console.error("Error processing audio:", error)
-      } finally {
-        setIsProcessing(false)
+  const handleMicPress = useCallback(
+    (e: React.MouseEvent | React.TouchEvent) => {
+      e.preventDefault();
+      if (!isMuted && isCallActive) {
+        resetActivityTimer();
+        handleMouseDown();
       }
-    } else if (!isMuted && isCallActive) {
-      resetActivityTimer() // Reset idle timer when user starts recording
-      startRecording()
-    }
-  }
+    },
+    [isMuted, isCallActive, handleMouseDown, resetActivityTimer]
+  );
+
+  const handleMicRelease = useCallback(
+    async (e: React.MouseEvent | React.TouchEvent) => {
+      e.preventDefault();
+      if (isRecording && isCallActive) {
+        setIsProcessing(true);
+        const blob = await stopRecording();
+        if (blob && blob.size > 0) {
+          console.log(`Sending audio blob of size ${blob.size} bytes to AI...`);
+          await sendMessage(blob);
+        } else {
+          console.warn("No audio captured—try speaking louder or hold longer.");
+        }
+        setIsProcessing(false);
+      }
+    },
+    [isRecording, isCallActive, stopRecording, sendMessage]
+  );
 
   const formatDuration = (seconds: number) => {
-    const mins = Math.floor(seconds / 60)
-    const secs = seconds % 60
-    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`
-  }
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+  };
 
   const handleStartCall = () => {
-    setIsCallActive(true)
-    setCallDuration(0)
-    resetActivityTimer() // Reset idle timer when call starts
-  }
+    setIsCallActive(true);
+    setCallDuration(0);
+    resetActivityTimer();
+  };
 
   const handleEndCall = () => {
-    setIsCallActive(false)
-    setCallDuration(0)
-    clearConversation()
-    onBack()
-  }
+    setIsCallActive(false);
+    setCallDuration(0);
+    clearConversation(); // Clear conversation state
+    // Stop any ongoing audio contexts and streams
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+    }
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+    }
+    onBack(); // Navigate back after cleanup
+  };
 
   const handleMuteToggle = () => {
-    setIsMuted(!isMuted)
+    setIsMuted(!isMuted);
     if (isRecording) {
-      stopRecording()
+      handleMouseUp(); // Stop on mute
     }
     if (!isMuted) {
-      resetActivityTimer() // Reset idle timer when muting
+      resetActivityTimer();
     }
-  }
+  };
 
   const getStatusText = () => {
-    if (!isCallActive) return "Ready to call"
-    if (isConnecting) return "Processing your message..."
-    if (isAISpeaking) return `${contact.name} is speaking...`
-    if (isRecording) return `Listening... ${formatDuration(recordingDuration)}`
-    if (isProcessing) return "Processing your message..."
-    return "Tap and hold to speak"
-  }
+    if (!isCallActive) return "Ready to call";
+    if (isConnecting) return "Processing your message...";
+    if (isAISpeaking) return `${contact.name} is speaking...`;
+    if (isRecording) return `Recording... ${formatDuration(recordingDuration)}`;
+    if (isProcessing) return "Processing your message...";
+    return "Tap and hold to speak";
+  };
+
+  // Expose refs for cleanup (temporary until hook handles this)
+  const streamRef = useRef<MediaStream | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-muted/20 to-background relative overflow-hidden">
@@ -149,7 +177,6 @@ export default function VoiceChat({ contact, onBack }: VoiceChatProps) {
             rotate: { duration: 15, repeat: Number.POSITIVE_INFINITY, ease: "linear" },
           }}
         />
-        {/* Additional floating elements */}
         <motion.div
           className="absolute top-1/4 left-1/4 w-20 h-20 bg-primary/10 rounded-full"
           animate={{
@@ -170,7 +197,6 @@ export default function VoiceChat({ contact, onBack }: VoiceChatProps) {
         />
       </div>
 
-      {/* Header */}
       <header className="relative z-10 flex items-center justify-between p-6">
         <motion.button
           onClick={onBack}
@@ -226,11 +252,9 @@ export default function VoiceChat({ contact, onBack }: VoiceChatProps) {
         </div>
       </header>
 
-      {/* Main Voice Interface */}
       <div className="relative z-10 flex-1 flex flex-col items-center justify-center px-6 py-8">
         <AnimatePresence mode="wait">
           {!isCallActive ? (
-            // Pre-call state
             <motion.div
               key="pre-call"
               initial={{ opacity: 0, scale: 0.9 }}
@@ -281,7 +305,6 @@ export default function VoiceChat({ contact, onBack }: VoiceChatProps) {
               </motion.button>
             </motion.div>
           ) : (
-            // Active call state
             <motion.div
               key="active-call"
               initial={{ opacity: 0, scale: 0.9 }}
@@ -330,9 +353,7 @@ export default function VoiceChat({ contact, onBack }: VoiceChatProps) {
                 )}
               </motion.div>
 
-              {/* Control Buttons */}
               <div className="flex items-center justify-center gap-6">
-                {/* Mute Button */}
                 <motion.button
                   onClick={handleMuteToggle}
                   className={`w-14 h-14 rounded-full flex items-center justify-center transition-all duration-300 shadow-lg ${
@@ -356,9 +377,11 @@ export default function VoiceChat({ contact, onBack }: VoiceChatProps) {
                   {isMuted ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
                 </motion.button>
 
-                {/* Main Mic Button */}
                 <motion.button
-                  onClick={handleMicToggle}
+                  onMouseDown={handleMicPress}
+                  onMouseUp={handleMicRelease}
+                  onTouchStart={handleMicPress}
+                  onTouchEnd={handleMicRelease}
                   disabled={isMuted || isAISpeaking}
                   className={`w-24 h-24 rounded-full flex items-center justify-center transition-all duration-300 shadow-xl ${
                     isRecording
@@ -382,7 +405,6 @@ export default function VoiceChat({ contact, onBack }: VoiceChatProps) {
                   <Mic className="w-10 h-10" />
                 </motion.button>
 
-                {/* End Call Button */}
                 <motion.button
                   onClick={handleEndCall}
                   className="w-14 h-14 bg-destructive hover:bg-destructive/90 rounded-full flex items-center justify-center transition-all duration-300 text-destructive-foreground shadow-lg"
@@ -393,7 +415,6 @@ export default function VoiceChat({ contact, onBack }: VoiceChatProps) {
                 </motion.button>
               </div>
 
-              {/* TTS Provider Toggle */}
               <motion.div
                 className="mt-8"
                 initial={{ opacity: 0 }}
@@ -414,7 +435,6 @@ export default function VoiceChat({ contact, onBack }: VoiceChatProps) {
         </AnimatePresence>
       </div>
 
-      {/* Conversation History Overlay */}
       <AnimatePresence>
         {showHistory && conversation.length > 0 && (
           <ConversationHistory
@@ -425,5 +445,5 @@ export default function VoiceChat({ contact, onBack }: VoiceChatProps) {
         )}
       </AnimatePresence>
     </div>
-  )
+  );
 }

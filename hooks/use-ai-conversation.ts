@@ -1,53 +1,74 @@
-"use client"
+"use client";
 
-import { useState, useCallback } from "react"
-import { audioManager } from "@/lib/audio-utils"
+import { useState, useCallback, useEffect } from "react";
+import { audioManager } from "@/lib/audio-utils";
 
 interface Message {
-  role: "user" | "assistant" | "idle"
-  content: string
-  timestamp: Date
+  role: "user" | "assistant" | "idle";
+  content: string;
+  timestamp: Date;
 }
 
+let globalStream: MediaStream | null = null;
+
 export function useAIConversation(contactId: string) {
-  const [isAISpeaking, setIsAISpeaking] = useState(false)
-  const [conversation, setConversation] = useState<Message[]>([])
-  const [isConnecting, setIsConnecting] = useState(false)
-  const [useElevenLabs, setUseElevenLabs] = useState(true)
+  const [isAISpeaking, setIsAISpeaking] = useState(false);
+  const [conversation, setConversation] = useState<Message[]>([]);
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [useElevenLabs, setUseElevenLabs] = useState(true);
+  const [prevContactId, setPrevContactId] = useState(contactId);
+  const [isPlaying, setIsPlaying] = useState(false); // Prevent concurrent playback
+
+  useEffect(() => {
+    if (prevContactId !== contactId) {
+      console.log(`Switching to ${contactId}: Resetting state`);
+      setConversation([]);
+      audioManager.stopCurrentAudio();
+      if (globalStream) {
+        globalStream.getTracks().forEach((track) => track.stop());
+        globalStream = null;
+      }
+      setPrevContactId(contactId);
+    }
+  }, [contactId, prevContactId]);
 
   const sendMessage = useCallback(
     async (audioBlob: Blob) => {
+      if (isPlaying) return; // Prevent overlap
       try {
-        setIsConnecting(true)
+        setIsConnecting(true);
+        await audioManager.resumeAudioContext();
 
-        await audioManager.resumeAudioContext()
+        const formData = new FormData();
+        formData.append("audio", audioBlob, "recording.webm");
+        formData.append("contactId", contactId);
 
-        const formData = new FormData()
-        formData.append("audio", audioBlob, "recording.webm")
-        formData.append("contactId", contactId)
-
-        const endpoint = useElevenLabs ? "/api/chat/elevenlabs" : "/api/chat"
+        const endpoint = useElevenLabs ? "/api/chat/elevenlabs" : "/api/chat";
 
         const response = await fetch(endpoint, {
           method: "POST",
           body: formData,
-        })
+        });
 
         if (!response.ok) {
-          const errorData = await response.json()
-          throw new Error(errorData.error || "Failed to process audio")
+          const errorData = await response.json();
+          throw new Error(errorData.error || "Audio processing failed");
         }
 
-        const userInput = decodeURIComponent(response.headers.get("X-User-Input") || "")
-        const aiResponse = decodeURIComponent(response.headers.get("X-AI-Response") || "")
+        const userInput = decodeURIComponent(
+          response.headers.get("X-User-Input") || ""
+        );
+        const aiResponse = decodeURIComponent(
+          response.headers.get("X-AI-Response") || ""
+        );
 
         if (userInput) {
           const userMessage: Message = {
             role: "user",
             content: userInput,
             timestamp: new Date(),
-          }
-          setConversation((prev) => [...prev, userMessage])
+          };
+          setConversation((prev) => [...prev, userMessage]);
         }
 
         if (aiResponse) {
@@ -55,100 +76,107 @@ export function useAIConversation(contactId: string) {
             role: "assistant",
             content: aiResponse,
             timestamp: new Date(),
-          }
-          setConversation((prev) => [...prev, aiMessage])
+          };
+          setConversation((prev) => [...prev, aiMessage]);
         }
 
-        const responseAudio = await response.blob()
-
-        setIsAISpeaking(true)
-
+        const responseAudio = await response.blob();
+        setIsPlaying(true);
+        setIsAISpeaking(true);
         try {
-          await audioManager.playAudioBlob(responseAudio)
+          await audioManager.playAudioBlob(responseAudio);
+        } catch (audioError) {
+          console.error("Audio playback failed:", audioError);
         } finally {
-          setIsAISpeaking(false)
+          setIsPlaying(false);
+          setIsAISpeaking(false);
         }
       } catch (error) {
-        console.error("Error in AI conversation:", error)
-        setIsAISpeaking(false)
+        console.error("Conversation error:", error);
+        setIsAISpeaking(false);
+        setTimeout(() => {
+          sendIdleResponse("Um, I missed that. Please try again?");
+        }, 1000);
       } finally {
-        setIsConnecting(false)
+        setIsConnecting(false);
       }
     },
-    [contactId, useElevenLabs],
-  )
+    [contactId, useElevenLabs, isPlaying]
+  );
 
   const sendIdleResponse = useCallback(
     async (idleText: string) => {
+      if (isPlaying) return;
       try {
-        console.log("[v0] Sending idle response:", idleText)
-        setIsConnecting(true)
+        console.log("[v0] Sending idle response:", idleText);
+        setIsConnecting(true);
 
-        // Add idle message to conversation
         const idleMessage: Message = {
           role: "idle",
           content: idleText,
           timestamp: new Date(),
-        }
-        setConversation((prev) => [...prev, idleMessage])
+        };
+        setConversation((prev) => [...prev, idleMessage]);
 
-        await audioManager.resumeAudioContext()
+        await audioManager.resumeAudioContext();
 
-        // Create a simple TTS request for the idle response
-        const endpoint = useElevenLabs ? "/api/chat/elevenlabs/idle" : "/api/chat/idle"
+        const endpoint = useElevenLabs
+          ? "/api/chat/elevenlabs/idle"
+          : "/api/chat/idle";
 
         const response = await fetch(endpoint, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            text: idleText,
-            contactId: contactId,
-          }),
-        })
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: idleText, contactId }),
+        });
 
         if (!response.ok) {
-          console.error("Failed to generate idle response audio")
-          return
+          console.error("Idle response audio failed");
+          return;
         }
 
-        const responseAudio = await response.blob()
-
-        setIsAISpeaking(true)
-
+        const responseAudio = await response.blob();
+        setIsPlaying(true);
+        setIsAISpeaking(true);
         try {
-          await audioManager.playAudioBlob(responseAudio)
+          await audioManager.playAudioBlob(responseAudio);
+        } catch (audioError) {
+          console.error("Idle audio playback failed:", audioError);
         } finally {
-          setIsAISpeaking(false)
+          setIsPlaying(false);
+          setIsAISpeaking(false);
         }
       } catch (error) {
-        console.error("Error in idle response:", error)
-        setIsAISpeaking(false)
+        console.error("Idle error:", error);
+        setIsAISpeaking(false);
       } finally {
-        setIsConnecting(false)
+        setIsConnecting(false);
       }
     },
-    [contactId, useElevenLabs],
-  )
+    [contactId, useElevenLabs, isPlaying]
+  );
 
   const toggleTTSProvider = useCallback(() => {
-    setUseElevenLabs((prev) => !prev)
-  }, [])
+    setUseElevenLabs((prev) => !prev);
+  }, []);
 
   const clearConversation = useCallback(() => {
-    setConversation([])
-    audioManager.stopCurrentAudio()
-  }, [])
+    setConversation([]);
+    audioManager.stopCurrentAudio();
+    if (globalStream) {
+      globalStream.getTracks().forEach((track) => track.stop());
+      globalStream = null;
+    }
+  }, []);
 
   return {
     isAISpeaking,
     conversation,
     sendMessage,
-    sendIdleResponse, // Expose idle response function
+    sendIdleResponse,
     isConnecting,
     useElevenLabs,
     toggleTTSProvider,
     clearConversation,
-  }
+  };
 }
