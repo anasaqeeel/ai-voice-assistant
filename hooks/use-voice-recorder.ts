@@ -1,19 +1,9 @@
 "use client";
 
-import {
-  useState,
-  useEffect,
-  useRef,
-  useCallback,
-  Dispatch,
-  SetStateAction,
-} from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import MicRecorder from "mic-recorder-to-mp3";
 
-const recorder = new MicRecorder({
-  bitRate: 128,
-  sampleRate: 16000,
-});
+const recorder = new MicRecorder({ bitRate: 128, sampleRate: 16000 });
 
 export function useVoiceRecorder() {
   const [isRecording, setIsRecording] = useState(false);
@@ -31,8 +21,7 @@ export function useVoiceRecorder() {
       const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
       analyserRef.current.getByteFrequencyData(dataArray);
       const rms = Math.sqrt(
-        dataArray.reduce((sum, value) => sum + value * value, 0) /
-          dataArray.length
+        dataArray.reduce((s, v) => s + v * v, 0) / dataArray.length
       );
       const normalizedLevel = Math.min(rms / 128, 1);
       setAudioLevel((prev) => prev * 0.7 + normalizedLevel * 0.3);
@@ -42,10 +31,10 @@ export function useVoiceRecorder() {
 
   useEffect(() => {
     if (isRecording) {
-      console.log("Recording started");
-      recordingTimerRef.current = setInterval(() => {
-        setRecordingDuration((prev) => prev + 1);
-      }, 1000);
+      recordingTimerRef.current = setInterval(
+        () => setRecordingDuration((p) => p + 1),
+        1000
+      );
       updateAudioLevel();
     } else {
       if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
@@ -58,18 +47,11 @@ export function useVoiceRecorder() {
 
   const startRecording = useCallback(async () => {
     try {
-      console.log("Requesting mic access...");
       if (!("mediaDevices" in navigator) || !window.isSecureContext) {
-        console.error(
-          "Microphone access requires a secure context (HTTPS). Use --https or ngrok."
-        );
-        alert(
-          "Microphone access requires HTTPS. Start with 'npm run dev -- --https' or use ngrok."
-        );
+        alert("Microphone access requires HTTPS.");
         return;
       }
-
-      const stream = await navigator.mediaDevices.getUserMedia({
+      await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
@@ -81,29 +63,23 @@ export function useVoiceRecorder() {
       const analyser = audioContext.createAnalyser();
       analyser.fftSize = 512;
       analyser.smoothingTimeConstant = 0.8;
-
       audioContextRef.current = audioContext;
       analyserRef.current = analyser;
 
       await recorder.start();
       setIsRecording(true);
       updateAudioLevel();
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error starting recording:", error);
       if (
-        error instanceof Error &&
-        (error.name === "NotAllowedError" ||
-          error.name === "PermissionDeniedError")
+        error?.name === "NotAllowedError" ||
+        error?.name === "PermissionDeniedError"
       ) {
-        alert(
-          "Microphone permission denied. Check OS settings or browser permissions."
-        );
-      } else if (error instanceof Error && error.name === "NotFoundError") {
-        alert("No microphone detected. Connect a microphone and retry.");
+        alert("Microphone permission denied.");
+      } else if (error?.name === "NotFoundError") {
+        alert("No microphone detected.");
       } else {
-        alert(
-          "Failed to access microphone. Please try again or contact support."
-        );
+        alert("Failed to access microphone.");
       }
     }
   }, [updateAudioLevel]);
@@ -112,20 +88,18 @@ export function useVoiceRecorder() {
     if (!isRecording) return null;
     setIsProcessing(true);
     try {
-      const [buffer, blob] = await recorder.stop().getMp3();
-      console.log(`Recording stopped. MP3 size: ${blob.size} bytes`);
-
+      const [, blob] = await recorder.stop().getMp3();
       if (audioContextRef.current) {
-        audioContextRef.current.close();
+        try {
+          audioContextRef.current.close();
+        } catch {}
         audioContextRef.current = null;
       }
-      if (animationFrameRef.current) {
+      if (animationFrameRef.current)
         cancelAnimationFrame(animationFrameRef.current);
-      }
       setIsRecording(false);
       setAudioLevel(0);
-
-      return blob.size > 0 ? blob : null;
+      return blob && blob.size > 0 ? blob : null;
     } catch (error) {
       console.error("Error stopping recording:", error);
       return null;
@@ -136,32 +110,35 @@ export function useVoiceRecorder() {
 
   useEffect(() => {
     return () => {
-      if (audioContextRef.current) audioContextRef.current.close();
+      if (audioContextRef.current) {
+        try {
+          audioContextRef.current.close();
+        } catch {}
+      }
       if (animationFrameRef.current)
         cancelAnimationFrame(animationFrameRef.current);
       if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+      try {
+        (recorder as any)?._active && recorder.stop();
+      } catch {}
     };
   }, []);
 
-  const handleMicToggle = useCallback(async () => {
-    if (isRecording) {
-      const blob = await stopRecording();
-      return blob;
-    } else {
-      startRecording();
-      return null;
-    }
-  }, [isRecording, startRecording, stopRecording]);
+  const handleMouseDown = useCallback(() => {
+    startRecording();
+  }, [startRecording]);
+  const handleMouseUp = useCallback(async () => {
+    await stopRecording();
+  }, [stopRecording]);
 
   return {
     isRecording,
     isProcessing,
     audioLevel,
     recordingDuration,
-    handleMouseDown: handleMicToggle, // Replaced with toggle logic
-    handleMouseUp: () => {}, // No longer needed with toggle
+    handleMouseDown,
+    handleMouseUp,
     setIsProcessing,
     stopRecording,
-    handleMicToggle, // Added for explicit toggle control
   };
 }

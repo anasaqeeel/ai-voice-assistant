@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { audioManager } from "@/lib/audio-utils";
 
 interface Message {
@@ -19,22 +19,55 @@ export function useAIConversation(contactId: string) {
   const [prevContactId, setPrevContactId] = useState(contactId);
   const [isPlaying, setIsPlaying] = useState(false);
 
+  // in-flight request + session guards
+  const currentReqRef = useRef<AbortController | null>(null);
+  const sessionIdRef = useRef<string>("");
+
+  const newSessionId = () => Math.random().toString(36).slice(2);
+
   useEffect(() => {
     if (prevContactId !== contactId) {
-      console.log(`Switching to ${contactId}: Resetting state`);
+      // persona switch → hard reset
+      interrupt();
       setConversation([]);
-      audioManager.stopCurrentAudio();
       if (globalStream) {
-        globalStream.getTracks().forEach((track) => track.stop());
+        globalStream.getTracks().forEach((t) => t.stop());
         globalStream = null;
       }
       setPrevContactId(contactId);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contactId, prevContactId]);
+
+  /** Stop audio + cancel any in-flight fetch; advance session so stale responses are ignored. */
+  const interrupt = useCallback(() => {
+    try {
+      audioManager.stopCurrentAudio();
+    } catch {}
+    setIsPlaying(false);
+    setIsAISpeaking(false);
+    if (currentReqRef.current) {
+      try {
+        currentReqRef.current.abort();
+      } catch {}
+      currentReqRef.current = null;
+    }
+    sessionIdRef.current = newSessionId();
+  }, []);
+
+  /** For End Call / Back */
+  const hardStop = useCallback(() => {
+    interrupt();
+  }, [interrupt]);
 
   const sendMessage = useCallback(
     async (audioBlob: Blob) => {
-      if (isPlaying) return;
+      if (!audioBlob || audioBlob.size === 0) return;
+
+      // Enable barge-in: kill current playback/requests before sending
+      interrupt();
+      const mySession = (sessionIdRef.current = newSessionId());
+
       try {
         setIsConnecting(true);
         await audioManager.resumeAudioContext();
@@ -45,14 +78,22 @@ export function useAIConversation(contactId: string) {
 
         const endpoint = useElevenLabs ? "/api/chat/elevenlabs" : "/api/chat";
 
+        const ac = new AbortController();
+        currentReqRef.current = ac;
+
         const response = await fetch(endpoint, {
           method: "POST",
           body: formData,
+          signal: ac.signal,
         });
 
+        currentReqRef.current = null;
+
         if (!response.ok) {
-          const errorData = await response.json();
-          throw new Error(errorData.error || "Audio processing failed");
+          // Don’t inject idle here—just log the error. Idle is managed by your idle hook.
+          const maybeJson = await safeJson(response);
+          console.error("Audio processing failed:", maybeJson);
+          return;
         }
 
         const userInput = decodeURIComponent(
@@ -63,60 +104,61 @@ export function useAIConversation(contactId: string) {
         );
 
         if (userInput) {
-          const userMessage: Message = {
-            role: "user",
-            content: userInput,
-            timestamp: new Date(),
-          };
-          setConversation((prev) => [...prev, userMessage]);
+          setConversation((prev) => [
+            ...prev,
+            { role: "user", content: userInput, timestamp: new Date() },
+          ]);
+        }
+        if (aiResponse) {
+          setConversation((prev) => [
+            ...prev,
+            { role: "assistant", content: aiResponse, timestamp: new Date() },
+          ]);
         }
 
-        if (aiResponse) {
-          const aiMessage: Message = {
-            role: "assistant",
-            content: aiResponse,
-            timestamp: new Date(),
-          };
-          setConversation((prev) => [...prev, aiMessage]);
-        }
+        // If we got interrupted while waiting, drop this audio
+        if (sessionIdRef.current !== mySession) return;
 
         const responseAudio = await response.blob();
+
+        if (sessionIdRef.current !== mySession) return;
+
         setIsPlaying(true);
         setIsAISpeaking(true);
         try {
           await audioManager.playAudioBlob(responseAudio);
-        } catch (audioError) {
-          console.error("Audio playback failed:", audioError);
+        } catch (e) {
+          console.error("Audio playback failed:", e);
         } finally {
           setIsPlaying(false);
           setIsAISpeaking(false);
         }
-      } catch (error) {
+      } catch (error: any) {
+        if (error?.name === "AbortError") return; // interrupted on purpose
         console.error("Conversation error:", error);
-        setIsAISpeaking(false);
-        setTimeout(() => {
-          sendIdleResponse("Um, I missed that. Please try again?");
-        }, 500); // Reduced delay to 500ms
       } finally {
         setIsConnecting(false);
       }
     },
-    [contactId, useElevenLabs, isPlaying]
+    [contactId, useElevenLabs, interrupt]
   );
 
   const sendIdleResponse = useCallback(
     async (idleText: string) => {
-      if (isPlaying) return;
+      if (!idleText) return;
+      // Don’t stack on top of current audio/requests
+      if (isPlaying || isConnecting) return;
+
+      interrupt();
+      const mySession = (sessionIdRef.current = newSessionId());
+
       try {
-        console.log("[v0] Sending idle response:", idleText);
         setIsConnecting(true);
 
-        const idleMessage: Message = {
-          role: "idle",
-          content: idleText,
-          timestamp: new Date(),
-        };
-        setConversation((prev) => [...prev, idleMessage]);
+        setConversation((prev) => [
+          ...prev,
+          { role: "idle", content: idleText, timestamp: new Date() },
+        ]);
 
         await audioManager.resumeAudioContext();
 
@@ -124,36 +166,45 @@ export function useAIConversation(contactId: string) {
           ? "/api/chat/elevenlabs/idle"
           : "/api/chat/idle";
 
+        const ac = new AbortController();
+        currentReqRef.current = ac;
+
         const response = await fetch(endpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text: idleText, contactId }),
+          signal: ac.signal,
         });
 
+        currentReqRef.current = null;
+
         if (!response.ok) {
-          console.error("Idle response audio failed");
+          const maybeJson = await safeJson(response);
+          console.error("Idle response failed:", maybeJson);
           return;
         }
 
+        if (sessionIdRef.current !== mySession) return;
         const responseAudio = await response.blob();
+        if (sessionIdRef.current !== mySession) return;
+
         setIsPlaying(true);
         setIsAISpeaking(true);
         try {
           await audioManager.playAudioBlob(responseAudio);
-        } catch (audioError) {
-          console.error("Idle audio playback failed:", audioError);
+        } catch (e) {
+          console.error("Idle audio playback failed:", e);
         } finally {
           setIsPlaying(false);
           setIsAISpeaking(false);
         }
-      } catch (error) {
-        console.error("Idle error:", error);
-        setIsAISpeaking(false);
+      } catch (error: any) {
+        if (error?.name !== "AbortError") console.error("Idle error:", error);
       } finally {
         setIsConnecting(false);
       }
     },
-    [contactId, useElevenLabs, isPlaying]
+    [contactId, useElevenLabs, isPlaying, isConnecting, interrupt]
   );
 
   const toggleTTSProvider = useCallback(() => {
@@ -161,13 +212,13 @@ export function useAIConversation(contactId: string) {
   }, []);
 
   const clearConversation = useCallback(() => {
+    interrupt();
     setConversation([]);
-    audioManager.stopCurrentAudio();
     if (globalStream) {
-      globalStream.getTracks().forEach((track) => track.stop());
+      globalStream.getTracks().forEach((t) => t.stop());
       globalStream = null;
     }
-  }, []);
+  }, [interrupt]);
 
   return {
     isAISpeaking,
@@ -178,5 +229,16 @@ export function useAIConversation(contactId: string) {
     useElevenLabs,
     toggleTTSProvider,
     clearConversation,
+    // expose for UI controls
+    hardStop,
+    interrupt,
   };
+}
+
+async function safeJson(res: Response) {
+  try {
+    return await res.json();
+  } catch {
+    return { status: res.status };
+  }
 }
