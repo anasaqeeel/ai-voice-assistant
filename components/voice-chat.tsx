@@ -48,8 +48,8 @@ export default function VoiceChat({ contact, onBack }: VoiceChatProps) {
     useElevenLabs,
     toggleTTSProvider,
     clearConversation,
-    hardStop,      // NEW: make sure we fully stop on back / end call
-    interrupt,     // NEW: barge-in when user taps mic
+    hardStop,      // <-- use this to fully stop audio/requests
+    interrupt,     // <-- barge-in on mic press while AI is speaking
   } = useAIConversation(contact.id);
 
   const { resetActivityTimer } = useIdleResponses(
@@ -71,12 +71,11 @@ export default function VoiceChat({ contact, onBack }: VoiceChatProps) {
     return () => clearInterval(timer);
   }, [isCallActive]);
 
-  // IMPORTANT: allow interrupt even while AI is speaking
+  // Barge-in: cut AI + cancel request, then start recording
   const handleMicPress = useCallback(
     (e: React.MouseEvent | React.TouchEvent) => {
       e.preventDefault();
       if (!isMuted && isCallActive) {
-        // stop current playback/in-flight request immediately
         if (isAISpeaking || isConnecting) {
           interrupt();
         }
@@ -115,7 +114,7 @@ export default function VoiceChat({ contact, onBack }: VoiceChatProps) {
   };
 
   const handleEndCall = () => {
-    // FULL STOP so voice doesn't continue in the background
+    // FULL STOP so voice doesn't continue after back/switch
     hardStop();
     setIsCallActive(false);
     setCallDuration(0);
@@ -124,7 +123,7 @@ export default function VoiceChat({ contact, onBack }: VoiceChatProps) {
   };
 
   const handleMuteToggle = () => {
-    setIsMuted(!isMuted);
+    setIsMuted((m) => !m);
     if (isRecording) handleMouseUp();
     if (!isMuted) resetActivityTimer();
   };
@@ -241,7 +240,7 @@ export default function VoiceChat({ contact, onBack }: VoiceChatProps) {
                   onMouseUp={handleMicRelease}
                   onTouchStart={handleMicPress}
                   onTouchEnd={handleMicRelease}
-                  disabled={isMuted /* allow press even if AI is speaking → we interrupt */}
+                  disabled={isMuted /* allow barge-in even if AI is speaking */}
                   className={`w-24 h-24 rounded-full flex items-center justify-center transition-all duration-300 shadow-xl ${
                     isRecording
                       ? "bg-gradient-to-r from-accent to-primary text-white"

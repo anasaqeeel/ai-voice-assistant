@@ -19,7 +19,6 @@ export function useAIConversation(contactId: string) {
   const [prevContactId, setPrevContactId] = useState(contactId);
   const [isPlaying, setIsPlaying] = useState(false);
 
-  // in-flight request + session guards
   const currentReqRef = useRef<AbortController | null>(null);
   const sessionIdRef = useRef<string>("");
 
@@ -27,11 +26,11 @@ export function useAIConversation(contactId: string) {
 
   useEffect(() => {
     if (prevContactId !== contactId) {
-      // persona switch → hard reset
+      // Switching persona: fully reset
       interrupt();
       setConversation([]);
       if (globalStream) {
-        globalStream.getTracks().forEach((t) => t.stop());
+        globalStream.getTracks().forEach((track) => track.stop());
         globalStream = null;
       }
       setPrevContactId(contactId);
@@ -39,7 +38,7 @@ export function useAIConversation(contactId: string) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contactId, prevContactId]);
 
-  /** Stop audio + cancel any in-flight fetch; advance session so stale responses are ignored. */
+  /** Hard stop audio, cancel requests, invalidate pending playback. */
   const interrupt = useCallback(() => {
     try {
       audioManager.stopCurrentAudio();
@@ -55,7 +54,6 @@ export function useAIConversation(contactId: string) {
     sessionIdRef.current = newSessionId();
   }, []);
 
-  /** For End Call / Back */
   const hardStop = useCallback(() => {
     interrupt();
   }, [interrupt]);
@@ -64,7 +62,7 @@ export function useAIConversation(contactId: string) {
     async (audioBlob: Blob) => {
       if (!audioBlob || audioBlob.size === 0) return;
 
-      // Enable barge-in: kill current playback/requests before sending
+      // Barge-in: kill current audio & request first
       interrupt();
       const mySession = (sessionIdRef.current = newSessionId());
 
@@ -90,9 +88,15 @@ export function useAIConversation(contactId: string) {
         currentReqRef.current = null;
 
         if (!response.ok) {
-          // Don’t inject idle here—just log the error. Idle is managed by your idle hook.
-          const maybeJson = await safeJson(response);
-          console.error("Audio processing failed:", maybeJson);
+          // Body might be empty → include status in logs
+          let info: any = {
+            status: response.status,
+            statusText: response.statusText,
+          };
+          try {
+            info = await response.json();
+          } catch {}
+          console.error("Audio processing failed:", info);
           return;
         }
 
@@ -116,25 +120,22 @@ export function useAIConversation(contactId: string) {
           ]);
         }
 
-        // If we got interrupted while waiting, drop this audio
         if (sessionIdRef.current !== mySession) return;
-
         const responseAudio = await response.blob();
-
         if (sessionIdRef.current !== mySession) return;
 
         setIsPlaying(true);
         setIsAISpeaking(true);
         try {
           await audioManager.playAudioBlob(responseAudio);
-        } catch (e) {
-          console.error("Audio playback failed:", e);
+        } catch (audioError) {
+          console.error("Audio playback failed:", audioError);
         } finally {
           setIsPlaying(false);
           setIsAISpeaking(false);
         }
       } catch (error: any) {
-        if (error?.name === "AbortError") return; // interrupted on purpose
+        if (error?.name === "AbortError") return; // expected on interrupt
         console.error("Conversation error:", error);
       } finally {
         setIsConnecting(false);
@@ -146,8 +147,7 @@ export function useAIConversation(contactId: string) {
   const sendIdleResponse = useCallback(
     async (idleText: string) => {
       if (!idleText) return;
-      // Don’t stack on top of current audio/requests
-      if (isPlaying || isConnecting) return;
+      if (isPlaying || isConnecting) return; // don't stack idle on top
 
       interrupt();
       const mySession = (sessionIdRef.current = newSessionId());
@@ -179,8 +179,14 @@ export function useAIConversation(contactId: string) {
         currentReqRef.current = null;
 
         if (!response.ok) {
-          const maybeJson = await safeJson(response);
-          console.error("Idle response failed:", maybeJson);
+          let info: any = {
+            status: response.status,
+            statusText: response.statusText,
+          };
+          try {
+            info = await response.json();
+          } catch {}
+          console.error("Idle response failed:", info);
           return;
         }
 
@@ -192,8 +198,8 @@ export function useAIConversation(contactId: string) {
         setIsAISpeaking(true);
         try {
           await audioManager.playAudioBlob(responseAudio);
-        } catch (e) {
-          console.error("Idle audio playback failed:", e);
+        } catch (audioError) {
+          console.error("Idle audio playback failed:", audioError);
         } finally {
           setIsPlaying(false);
           setIsAISpeaking(false);
@@ -215,7 +221,7 @@ export function useAIConversation(contactId: string) {
     interrupt();
     setConversation([]);
     if (globalStream) {
-      globalStream.getTracks().forEach((t) => t.stop());
+      globalStream.getTracks().forEach((track) => track.stop());
       globalStream = null;
     }
   }, [interrupt]);
@@ -229,16 +235,8 @@ export function useAIConversation(contactId: string) {
     useElevenLabs,
     toggleTTSProvider,
     clearConversation,
-    // expose for UI controls
+    // expose for UI
     hardStop,
     interrupt,
   };
-}
-
-async function safeJson(res: Response) {
-  try {
-    return await res.json();
-  } catch {
-    return { status: res.status };
-  }
 }
